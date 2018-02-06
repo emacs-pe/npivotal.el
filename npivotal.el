@@ -30,8 +30,11 @@
 ;; Pivotal integration.  See <URL:https://www.pivotaltracker.com/>
 
 ;;; Code:
-(require 'cl-lib)
-(require 'url)
+(eval-when-compile
+  (require 'cl-lib)
+  (require 'subr-x)
+  (defvar url-http-end-of-headers)
+  (defvar url-http-response-status))
 (require 'json)
 (require 'tabulated-list)
 
@@ -44,8 +47,37 @@
   :group 'pivotal
   :type 'string)
 
-(defvar pivotal-base-url "https://www.pivotaltracker.com/services/v5")
+(defvar pivotal-read-response-function #'pivotal-read-json-response)
 
+(defconst pivotal-api-base-url "https://www.pivotaltracker.com/services/v5")
+
+(define-error 'pivotal-error "Pivotal Error")
+(define-error 'pivotal-http-error "HTTP Error" 'pivotal-error)
+
+;; API
+(defun pivotal-read-json-response (start end)
+  "Read json from START to END points."
+  (json-read-from-string (decode-coding-string (buffer-substring-no-properties start end) 'utf-8)))
+
+(defun pivotal-request (method resource &optional params data noerror)
+  "Make a request using METHOD for RESOURCE.
+
+METHOD is a HTTP request method, a string.  If non-nil, send
+PARAMS and/or DATA in the request.  Raises an error unless
+optional NOERROR is non-nil, in which case return nil."
+  (let* ((p (and params (concat "?" (url-build-query-string params))))
+         (d (and data (encode-coding-string (json-encode-list data) 'utf-8)))
+         (url-request-extra-headers `(("Content-Type"   . "application/json")
+                                      ("X-TrackerToken" . ,pivotal-api-token)))
+         (url-request-method method)
+         (url-request-data d))
+    (with-current-buffer (url-retrieve-synchronously (concat pivotal-api-base-url resource p))
+      (set-buffer-multibyte t)
+      (goto-char (1+ url-http-end-of-headers))
+      (let ((body (funcall pivotal-read-response-function (point) (point-max))))
+        (unless (or noerror (= (/ url-http-response-status 100) 2))
+          (signal 'pivotal-http-error (cons url-http-response-status (list method resource p d body))))
+        body))))
 
 ;; Endpoints
 
