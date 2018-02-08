@@ -1,9 +1,9 @@
-;;; npivotal.el --- Pivotal Tracker Integration       -*- lexical-binding: t -*-
+;;; pivotal.el --- Pivotal Tracker Integration        -*- lexical-binding: t -*-
 
 ;; Copyright (c) 2018 PuercoPop
 
 ;; Author: PuercoPop
-;; URL: https://github.com/emacs-pe/npivotal.el
+;; URL: https://github.com/emacs-pe/pivotal.el
 ;; Keywords: convenience
 ;; Version: 0.0.1
 ;; Package-Requires: ((emacs "25.1") (let-alist "1.0.4"))
@@ -33,6 +33,7 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x)
+  (require 'url-vars)
   (defvar url-http-end-of-headers)
   (defvar url-http-response-status))
 (require 'json)
@@ -128,5 +129,5 @@ optional NOERROR is non-nil, in which case return nil."
     (tabulated-list-print)
     (pop-to-buffer (current-buffer))))
 
-(provide 'npivotal)
-;;; npivotal.el ends here
+(provide 'pivotal)
+;;; pivotal.el ends here
