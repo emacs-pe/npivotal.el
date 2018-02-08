@@ -39,11 +39,13 @@
 (require 'tabulated-list)
 
 (defgroup pivotal nil
-  "Emacs Mode for interacting with Pivotal Tracker"
+  "Emacs Mode for interacting with Pivotal Tracker."
   :group 'external) ;; Check if there is a better category
 
 (defcustom pivotal-api-token nil
-  "The token used for authentication."
+  "The token used for authentication.
+
+You can obtain your API key in `https://www.pivotaltracker.com/profile'."
   :group 'pivotal
   :type 'string)
 
@@ -55,6 +57,13 @@
 (define-error 'pivotal-http-error "HTTP Error" 'pivotal-error)
 
 ;; API
+(defun pivotal-as-string (value)
+  "If VALUE is already a string, return it.  Otherwise convert it to a string and return that."
+  (cl-etypecase value
+    (stringp value)
+    (numberp (number-to-string value))
+    (symbolp (symbol-name value))))
+
 (defun pivotal-read-json-response (start end)
   "Read json from START to END points."
   (json-read-from-string (decode-coding-string (buffer-substring-no-properties start end) 'utf-8)))
@@ -65,6 +74,7 @@
 METHOD is a HTTP request method, a string.  If non-nil, send
 PARAMS and/or DATA in the request.  Raises an error unless
 optional NOERROR is non-nil, in which case return nil."
+  (cl-assert pivotal-api-token nil "Pivotal api key is not defined.")
   (let* ((p (and params (concat "?" (url-build-query-string params))))
          (d (and data (encode-coding-string (json-encode-list data) 'utf-8)))
          (url-request-extra-headers `(("Content-Type"   . "application/json")
@@ -81,63 +91,42 @@ optional NOERROR is non-nil, in which case return nil."
 
 ;; Endpoints
 
-(defun pivotal-endpoint-url (path)
-  (format "%s%s" pivotal-base-url path))
-
-(cl-defmacro with-pivotal-authentication ((endpoint &key (method "GET")) &body body)
-  (let ((temp-buffer (gensym)))
-    `(let* ((url-request-method ,method)
-            (url-request-extra-headers '(("X-TrackerToken" . ,pivotal-api-token)))
-            (,temp-buffer (url-retrieve-synchronously ,(pivotal-endpoint-url endpoint))))
-       (let-alist (with-current-buffer ,temp-buffer
-                    (search-forward-regexp "^\r?\n\r?" nil 'noerror)
-                    (json-read))
-         ,@body))))
-
-
-
-
-
-;; (let* ((url-request-extra-headers `(("X-TrackerToken" . ,pivotal-api-token)))
-;;        (request-buffer (url-retrieve (pivotal-endpoint-url "/me")
-;;                                      (lambda (status)
-;;                                        (when-let ((error-msg (plist-get status :error)))
-;;                                          (error "Error: %s" error-msg))
-;;                                        (search-forward-regexp "^\r?\n\r?" nil 'noerror)
-;;                                        (let ((json (json-read)))
-;;                                          (with-temp-buffer
-;;                                            (url-insert-buffer-contents json))))))
-;;        (values request-buffer)))
-
 
 ;; Resources
 
 
 ;; UI
+(defun pivotal-projects-list-entries ()
+  "Return a entry of `tabulated-list-entries' for pivotal projects."
+  (seq-map (lambda (project)
+             (let-alist project
+               (list (pivotal-as-string .id)
+                     (vector (pivotal-as-string .id)
+                             .name
+                             (pivotal-as-string .version)
+                             (pivotal-as-string .current_iteration_number)))))
+           (pivotal-request "GET" "/projects" '(("fields" "id,name,version,current_iteration_number")))))
 
-(define-derived-mode pivotal-projects tabulated-list-mode "*pivotal-projects*" "List your Pivotal Projects."
-  (setq tabulated-list-entries 'pivotal--list-projects
-        tabulated-list-format [("ID" 10 #'<)
-                               ("FAV" 3 nil)
-                               ("Project Name" -1 t)])
-  (tabutaled-list-init-header))
+(define-derived-mode pivotal-projects-list-mode tabulated-list-mode "pivotal-projects"
+  "list available nix packages.
 
-(defun pivotal--list-projects ()
-  (let* ((url-request-extra-headers `(("X-TrackerToken" . ,pivotal-api-token)))
-         (reponse-buffer (url-retrieve-synchronously (pivotal-endpoint-url "/me"))))
-    (let-alist (with-current-buffer reponse-buffer
-                 (search-forward-regexp "^\r?\n\r?" nil 'noerror)
-                 (json-read))
-      .projects)))
-
-(defun pivotal-list-projects (projects)
-  (with-current-buffer (get-buffer-create "*pivotal-projects*")
-    (dotimes (ix (length projects))
-      (let ((project (elt projects ix)))
-        (let-alist project
-          (insert (format "%s\n" .project_name)))))))
+\\{pivotal-projects-list-mode}"
+  (setq tabulated-list-format [("id" 10  t :read-only t)
+                               ("name" 15 t :read-only t)
+                               ("version" 10 t :read-only t)
+                               ("current iteration" 10 t :read-only t)]
+        tabulated-list-padding 2
+        tabulated-list-entries 'pivotal-projects-list-entries)
+  (tabulated-list-init-header))
 
 ;; Entry points
+(defun pivotal-list-projects ()
+  "Open a tabulated list with the projects."
+  (interactive)
+  (with-current-buffer (get-buffer-create "*Pivotal-Projects*")
+    (pivotal-projects-list-mode)
+    (tabulated-list-print)
+    (pop-to-buffer (current-buffer))))
 
 (provide 'npivotal)
 ;;; npivotal.el ends here
