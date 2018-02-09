@@ -30,6 +30,7 @@
 ;; Pivotal integration.  See <URL:https://www.pivotaltracker.com/>
 
 ;;; Code:
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x)
@@ -56,6 +57,7 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
 
 (define-error 'pivotal-error "Pivotal Error")
 (define-error 'pivotal-http-error "HTTP Error" 'pivotal-error)
+
 
 ;; API
 (defun pivotal-as-string (value)
@@ -75,7 +77,7 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
 METHOD is a HTTP request method, a string.  If non-nil, send
 PARAMS and/or DATA in the request.  Raises an error unless
 optional NOERROR is non-nil, in which case return nil."
-  (cl-assert pivotal-api-token nil "Pivotal api key is not defined.")
+  (cl-assert pivotal-api-token nil "Pivotal API key is not defined.")
   (let* ((p (and params (concat "?" (url-build-query-string params))))
          (d (and data (encode-coding-string (json-encode-list data) 'utf-8)))
          (url-request-extra-headers `(("Content-Type"   . "application/json")
@@ -97,6 +99,7 @@ optional NOERROR is non-nil, in which case return nil."
 
 
 ;; UI
+
 (defun pivotal-projects-list-entries ()
   "Return a entry of `tabulated-list-entries' for pivotal projects."
   (seq-map (lambda (project)
@@ -109,7 +112,7 @@ optional NOERROR is non-nil, in which case return nil."
            (pivotal-request "GET" "/projects" '(("fields" "id,name,version,current_iteration_number")))))
 
 (define-derived-mode pivotal-projects-list-mode tabulated-list-mode "pivotal-projects"
-  "list available nix packages.
+  "List Pivotal projects return the user is part of.
 
 \\{pivotal-projects-list-mode}"
   (setq tabulated-list-format [("id" 10  t :read-only t)
@@ -121,8 +124,9 @@ optional NOERROR is non-nil, in which case return nil."
   (tabulated-list-init-header))
 
 ;; Entry points
+
 (defun pivotal-list-projects ()
-  "Open a tabulated list with the projects."
+  "Open a tabulated list of the projects."
   (interactive)
   (with-current-buffer (get-buffer-create "*Pivotal-Projects*")
     (pivotal-projects-list-mode)
