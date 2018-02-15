@@ -122,7 +122,7 @@ optional NOERROR is non-nil, in which case return nil."
     (or (and (not current-prefix-arg) default)
         (let ((entries (seq-map (lambda (project)
                                   (let-alist project
-                                    (cons (format "[id:%s] %s" .id .name) .id)))
+                                    (cons (format "[id=%s] %s" .id .name) .id)))
                                 (pivotal-request "GET" "/projects" '(("fields" "id,name"))))))
           (assoc-default (completing-read prompt entries nil t) entries)))))
 
@@ -155,14 +155,14 @@ The following PROPERTIES constitute:
 `:actions ACTIONS'
     List of ACTIONS which can be executed over a list of entries."
   (declare (indent 1) (doc-string 2))
-  (let* ((mode      (pivotal-as-symbol (format "%s-mode" symbol)))
+  (let* ((mode      (pivotal-as-symbol (format "pivotal-%s-mode" symbol)))
          (mode-map  (pivotal-as-symbol (format "%s-map" mode)))
          (mode-name (format "%s menu" symbol))
          (buffer    (plist-get properties :buffer))
          (actions   (plist-get properties :actions))
          (columns   (plist-get properties :columns))
          (entries   (plist-get properties :entries))
-         (display-list (pivotal-as-symbol (format "%s-list" symbol))))
+         (display-list (pivotal-as-symbol (format "pivotal-list-%s" symbol))))
     (when (null buffer)
       (error ":buffer property is required"))
     (when (null entries)
@@ -224,7 +224,7 @@ The following PROPERTIES constitute:
 
 ;; Entry points
 
-(pivotal-tbl-define pivotal-projects
+(pivotal-tbl-define projects
   "List of pivotal projects."
   :buffer  "*pivotal*"
   :columns [("id"        10 t)
@@ -234,7 +234,7 @@ The following PROPERTIES constitute:
   :entries 'pivotal-entries-projects
   :actions '(([return] "Show project information."  pivotal-show-project)))
 
-(pivotal-tbl-define pivotal-iterations
+(pivotal-tbl-define iterations
   "List of pivotal project iterations."
   :buffer  "*pivotal-iterations*"
   :columns [("number"    10 t)
@@ -244,7 +244,7 @@ The following PROPERTIES constitute:
   :entries 'pivotal-entries-project-iterations
   :actions '(([return] "Show iteration information."  pivotal-show-iteration)))
 
-(pivotal-tbl-define pivotal-stories
+(pivotal-tbl-define stories
   "List of pivotal project stories."
   :buffer  "*pivotal-stories*"
   :columns [("id"    10 t)
