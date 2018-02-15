@@ -211,6 +211,16 @@ The following PROPERTIES constitute:
                                .finish))))
              (pivotal-request "GET" (format "/projects/%s/iterations" project-id) '(("fields" "number,team_strength,start,finish,kind"))))))
 
+(defun pivotal-entries-project-stories (&optional project-id)
+  "Stories list for pivotal project PROJECT-ID."
+  (let ((project-id (setq pivotal-project-id (or project-id pivotal-project-id (pivotal-read-project-id "Project: ")))))
+    (seq-map (lambda (story)
+               (let-alist story
+                 (list (pivotal-as-string .id)
+                       (vector (pivotal-as-string .id)
+                               .current_state
+                               .name))))
+             (pivotal-request "GET" (format "/projects/%s/stories" project-id) '(("fields" "id,name,current_state,url,labels(name)"))))))
 
 ;; Entry points
 
@@ -233,6 +243,16 @@ The following PROPERTIES constitute:
             ("finish"    21 pivotal-time<)]
   :entries 'pivotal-entries-project-iterations
   :actions '(([return] "Show iteration information."  pivotal-show-iteration)))
+
+(pivotal-tbl-define pivotal-stories
+  "List of pivotal project stories."
+  :buffer  "*pivotal-stories*"
+  :columns [("id"    10 t)
+            ("state" 10 t)
+            ("name"  20 t)]
+  :entries 'pivotal-entries-project-stories
+  :actions '(([return] "Show story information."     pivotal-show-story)
+             ("O"      "Export to a Org-mode entry"  pivotal-export-story-to-org)))
 
 (provide 'pivotal)
 ;;; pivotal.el ends here
