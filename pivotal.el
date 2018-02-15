@@ -158,38 +158,29 @@ The following PROPERTIES constitute:
            (tabulated-list-print)
            (pop-to-buffer (current-buffer)))))))
 
-(defun pivotal-projects-list-entries ()
-  "Return a entry of `tabulated-list-entries' for pivotal projects."
+(defun pivotal-entries-projects ()
+  "Entries list for pivotal projects."
   (seq-map (lambda (project)
              (let-alist project
                (list (pivotal-as-string .id)
                      (vector (pivotal-as-string .id)
-                             .name
                              (pivotal-as-string .version)
-                             (pivotal-as-string .current_iteration_number)))))
+                             (pivotal-as-string .current_iteration_number)
+                             .name))))
            (pivotal-request "GET" "/projects" '(("fields" "id,name,version,current_iteration_number")))))
 
-(define-derived-mode pivotal-projects-list-mode tabulated-list-mode "pivotal-projects"
-  "List Pivotal projects return the user is part of.
-
-\\{pivotal-projects-list-mode}"
-  (setq tabulated-list-format [("id" 10  t :read-only t)
-                               ("name" 15 t :read-only t)
-                               ("version" 10 t :read-only t)
-                               ("current iteration" 10 t :read-only t)]
-        tabulated-list-padding 2
-        tabulated-list-entries 'pivotal-projects-list-entries)
-  (tabulated-list-init-header))
 
 ;; Entry points
 
-(defun pivotal-list-projects ()
-  "Open a tabulated list of the projects."
-  (interactive)
-  (with-current-buffer (get-buffer-create "*Pivotal-Projects*")
-    (pivotal-projects-list-mode)
-    (tabulated-list-print)
-    (pop-to-buffer (current-buffer))))
+(pivotal-tbl-define pivotal-projects
+  "List of pivotal projects."
+  :buffer  "*pivotal*"
+  :columns [("id"        10 t)
+            ("version"   10 t)
+            ("iteration" 11 t)
+            ("name"      10 t)]
+  :entries 'pivotal-entries-projects
+  :actions '(([return] "Show project information."  pivotal-show-project)))
 
 (provide 'pivotal)
 ;;; pivotal.el ends here
