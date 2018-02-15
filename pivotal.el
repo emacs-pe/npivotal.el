@@ -38,6 +38,7 @@
   (defvar url-http-end-of-headers)
   (defvar url-http-response-status))
 (require 'json)
+(require 'parse-time)
 (require 'tabulated-list)
 
 (defgroup pivotal nil
@@ -50,6 +51,8 @@
 You can obtain your API key in `https://www.pivotaltracker.com/profile'."
   :group 'pivotal
   :type 'string)
+
+(defvar-local pivotal-project-id nil)
 
 (defvar pivotal-read-response-function #'pivotal-read-json-response)
 
@@ -75,6 +78,23 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
   "Read json from START to END points."
   (json-read-from-string (decode-coding-string (buffer-substring-no-properties start end) 'utf-8)))
 
+(defun pivotal-2ft (value)
+  "Convert VALUE to a floating point time.
+
+If S is already a number, just return it.  If it is a string,
+parse it as a time string and apply `float-time' to it.  If VALUE
+is nil, just return 0."
+  (cl-typecase value
+    (numberp value)
+    (stringp (condition-case nil
+                 (float-time (parse-iso8601-time-string value))
+               (error 0.)))
+    (t       0.)))
+
+(defun pivotal-time< (a b)
+  "Compare date A and B. Suitable as predicate for `sort'."
+  (setq a (pivotal-2ft a) b (pivotal-2ft b)) (and (> a 0) (> b 0) (< a b)))
+
 (defun pivotal-request (method resource &optional params data noerror)
   "Make a request using METHOD for RESOURCE.
 
@@ -95,6 +115,16 @@ optional NOERROR is non-nil, in which case return nil."
         (unless (or noerror (= (/ url-http-response-status 100) 2))
           (signal 'pivotal-http-error (cons url-http-response-status (list method resource p d body))))
         body))))
+
+(defun pivotal-read-project-id (prompt)
+  "Read a pivotal project id with a PROMPT."
+  (let ((default (and (derived-mode-p 'pivotal-projects-mode) (tabulated-list-get-id))))
+    (or (and (not current-prefix-arg) default)
+        (let ((entries (seq-map (lambda (project)
+                                  (let-alist project
+                                    (cons (format "[id:%s] %s" .id .name) .id)))
+                                (pivotal-request "GET" "/projects" '(("fields" "id,name"))))))
+          (assoc-default (completing-read prompt entries nil t) entries)))))
 
 ;; Endpoints
 
@@ -169,6 +199,18 @@ The following PROPERTIES constitute:
                              .name))))
            (pivotal-request "GET" "/projects" '(("fields" "id,name,version,current_iteration_number")))))
 
+(defun pivotal-entries-project-iterations (&optional project-id)
+  "Iteration list for pivotal project PROJECT-ID."
+  (let ((project-id (setq pivotal-project-id (or project-id pivotal-project-id (pivotal-read-project-id "Project: ")))))
+    (seq-map (lambda (iteration)
+               (let-alist iteration
+                 (list (pivotal-as-string .number)
+                       (vector (pivotal-as-string .number)
+                               (pivotal-as-string .team_strength)
+                               .start
+                               .finish))))
+             (pivotal-request "GET" (format "/projects/%s/iterations" project-id) '(("fields" "number,team_strength,start,finish,kind"))))))
+
 
 ;; Entry points
 
@@ -181,6 +223,16 @@ The following PROPERTIES constitute:
             ("name"      10 t)]
   :entries 'pivotal-entries-projects
   :actions '(([return] "Show project information."  pivotal-show-project)))
+
+(pivotal-tbl-define pivotal-iterations
+  "List of pivotal project iterations."
+  :buffer  "*pivotal-iterations*"
+  :columns [("number"    10 t)
+            ("strength"  10 t)
+            ("start"     21 pivotal-time<)
+            ("finish"    21 pivotal-time<)]
+  :entries 'pivotal-entries-project-iterations
+  :actions '(([return] "Show iteration information."  pivotal-show-iteration)))
 
 (provide 'pivotal)
 ;;; pivotal.el ends here
