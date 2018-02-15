@@ -254,5 +254,12 @@ The following PROPERTIES constitute:
   :actions '(([return] "Show story information."     pivotal-show-story)
              ("O"      "Export to a Org-mode entry"  pivotal-export-story-to-org)))
 
+;;;###autoload
+(defun pivotal-show-project (project-id)
+  "Show project information PROJECT-ID."
+  (interactive (list (pivotal-read-project-id "Project: ")))
+  (let-alist (pivotal-request "GET" (format "/projects/%s" project-id))
+    (message "[TODO] Show project: %s" .name)))
+
 (provide 'pivotal)
 ;;; pivotal.el ends here
