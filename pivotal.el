@@ -60,12 +60,16 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
 
 
 ;; API
-(defun pivotal-as-string (value)
+(defsubst pivotal-as-string (value)
   "If VALUE is already a string, return it.  Otherwise convert it to a string and return that."
   (cl-etypecase value
     (stringp value)
     (numberp (number-to-string value))
     (symbolp (symbol-name value))))
+
+(defsubst pivotal-as-symbol (string-or-symbol)
+  "If STRING-OR-SYMBOL is already a symbol, return it.  Otherwise convert it to a symbol and return that."
+  (if (symbolp string-or-symbol) string-or-symbol (intern string-or-symbol)))
 
 (defun pivotal-read-json-response (start end)
   "Read json from START to END points."
@@ -99,6 +103,60 @@ optional NOERROR is non-nil, in which case return nil."
 
 
 ;; UI
+
+(defmacro pivotal-tbl-define (symbol docstring &rest properties)
+  "Define tabulated list UI.
+
+Define SYMBOL as a generic `tabulated-list' UI with DOCSTRING.
+The following PROPERTIES constitute:
+
+`:buffer BUFFER-NAME'
+    BUFFER-NAME can be a string or a function to obtain the buffer name.
+
+`:actions ACTIONS'
+    ACTIONS available for entries, it must be of the form (key doc command).
+
+`:columns COLUMN'
+    COLUMNS used for displaying the column format.  See `tabulated-list-format'.
+
+`:entries ENTRIES'
+    Entries can be either a list of function.  See `tabulated-list-entries'.
+
+`:actions ACTIONS'
+    List of ACTIONS which can be executed over a list of entries."
+  (declare (indent 1) (doc-string 2))
+  (let* ((mode      (pivotal-as-symbol (format "%s-mode" symbol)))
+         (mode-map  (pivotal-as-symbol (format "%s-map" mode)))
+         (mode-name (format "%s menu" symbol))
+         (buffer    (plist-get properties :buffer))
+         (actions   (plist-get properties :actions))
+         (columns   (plist-get properties :columns))
+         (entries   (plist-get properties :entries))
+         (display-list (pivotal-as-symbol (format "%s-list" symbol))))
+    (when (null buffer)
+      (error ":buffer property is required"))
+    (when (null entries)
+      (error ":entries property is required"))
+    (when (null columns)
+      (error ":columns property is required"))
+
+    `(progn
+       (define-derived-mode ,mode tabulated-list-mode ,mode-name
+         ,docstring
+         (setq tabulated-list-format ,columns
+               tabulated-list-entries ,entries
+               tabulated-list-padding 2)
+         (tabulated-list-init-header))
+
+       (dolist (action ,actions)
+         (define-key ,mode-map (nth 0 action) (nth 2 action)))
+
+       (defun ,display-list ()
+         (interactive)
+         (with-current-buffer (get-buffer-create (if (functionp ,buffer) (funcall ,buffer) ,buffer))
+           (funcall ',mode)
+           (tabulated-list-print)
+           (pop-to-buffer (current-buffer)))))))
 
 (defun pivotal-projects-list-entries ()
   "Return a entry of `tabulated-list-entries' for pivotal projects."
