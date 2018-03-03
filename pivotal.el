@@ -95,6 +95,10 @@ is nil, just return 0."
   "Compare date A and B. Suitable as predicate for `sort'."
   (setq a (pivotal-2ft a) b (pivotal-2ft b)) (and (> a 0) (> b 0) (< a b)))
 
+(defun pivotal-tabulated-time< (n entry-a entry-b)
+  "Compare time value by Nth entry N of ENTRY-A and ENTRY-B tabulated entries."
+  (pivotal-time< (elt (cadr entry-a) n) (elt (cadr entry-b) n)))
+
 (defun pivotal-request (method resource &optional params data noerror)
   "Make a request using METHOD for RESOURCE.
 
@@ -134,7 +138,7 @@ optional NOERROR is non-nil, in which case return nil."
 
 ;; UI
 
-(defmacro pivotal-tbl-define (symbol docstring &rest properties)
+(defmacro pivotal-define-tbl (symbol docstring &rest properties)
   "Define tabulated list UI.
 
 Define SYMBOL as a generic `tabulated-list' UI with DOCSTRING.
@@ -152,19 +156,22 @@ The following PROPERTIES constitute:
 `:entries ENTRIES'
     Entries can be either a list of function.  See `tabulated-list-entries'.
 
-`:actions ACTIONS'
-    List of ACTIONS which can be executed over a list of entries."
-  (declare (indent 1) (doc-string 2))
+`:keymap MAP'
+    List of keymaps which can be executed over a list of entries.
+
+`:menu NAME'
+    Menu name used as entry point function.  by default uses adds `-list-' to the SYMBOL name."
+  (declare (indent defun) (doc-string 2))
   (let* ((mode      (pivotal-as-symbol (format "pivotal-%s-mode" symbol)))
          (mode-map  (pivotal-as-symbol (format "%s-map" mode)))
          (mode-name (format "%s menu" symbol))
-         (buffer    (plist-get properties :buffer))
-         (actions   (plist-get properties :actions))
+         (keymap    (plist-get properties :keymap))
          (columns   (plist-get properties :columns))
          (entries   (plist-get properties :entries))
-         (display-list (pivotal-as-symbol (format "pivotal-list-%s" symbol))))
-    (when (null buffer)
-      (error ":buffer property is required"))
+         (menu-name (or (plist-get properties :menu)
+                        (pivotal-as-symbol (format "pivotal-list-%s" symbol))))
+         (menu-buffer (or (plist-get properties :buffer)
+                          (format "*%s*" menu-name))))
     (when (null entries)
       (error ":entries property is required"))
     (when (null columns)
@@ -172,19 +179,21 @@ The following PROPERTIES constitute:
 
     `(progn
        (define-derived-mode ,mode tabulated-list-mode ,mode-name
-         ,docstring
          (setq tabulated-list-format ,columns
                tabulated-list-entries ,entries
                tabulated-list-padding 2)
          (tabulated-list-init-header))
 
-       (dolist (action ,actions)
-         (define-key ,mode-map (nth 0 action) (nth 2 action)))
+       (pcase-dolist (`(,key . ,def) ,keymap)
+         (define-key ,mode-map
+           (if (vectorp key) key (read-kbd-macro key))
+           (if (and (boundp def) (keymapp (symbol-value def))) (symbol-value def) def)))
 
-       (defun ,display-list ()
+       (defun ,menu-name ()
+         ,docstring
          (interactive)
-         (with-current-buffer (get-buffer-create (if (functionp ,buffer) (funcall ,buffer) ,buffer))
-           (funcall ',mode)
+         (with-current-buffer (get-buffer-create (if (functionp ,menu-buffer) (funcall ,menu-buffer) ,menu-buffer))
+           (funcall (function ,mode))
            (tabulated-list-print)
            (pop-to-buffer (current-buffer)))))))
 
@@ -199,7 +208,7 @@ The following PROPERTIES constitute:
                              .name))))
            (pivotal-request "GET" "/projects" '(("fields" "id,name,version,current_iteration_number")))))
 
-(defun pivotal-entries-project-iterations (&optional project-id)
+(defun pivotal-entries-iterations (&optional project-id)
   "Iteration list for pivotal project PROJECT-ID."
   (let ((project-id (setq pivotal-project-id (or project-id pivotal-project-id (pivotal-read-project-id "Project: ")))))
     (seq-map (lambda (iteration)
@@ -211,7 +220,7 @@ The following PROPERTIES constitute:
                                .finish))))
              (pivotal-request "GET" (format "/projects/%s/iterations" project-id) '(("fields" "number,team_strength,start,finish,kind"))))))
 
-(defun pivotal-entries-project-stories (&optional project-id)
+(defun pivotal-entries-stories (&optional project-id)
   "Stories list for pivotal project PROJECT-ID."
   (let ((project-id (setq pivotal-project-id (or project-id pivotal-project-id (pivotal-read-project-id "Project: ")))))
     (seq-map (lambda (story)
@@ -224,35 +233,35 @@ The following PROPERTIES constitute:
 
 ;; Entry points
 
-(pivotal-tbl-define projects
+;;;###autoload(autoload 'pivotal-list-projects "pivotal")
+(pivotal-define-tbl projects
   "List of pivotal projects."
-  :buffer  "*pivotal*"
+  :menu    pivotal-list-projects
   :columns [("id"        10 t)
             ("version"   10 t)
             ("iteration" 11 t)
             ("name"      10 t)]
   :entries 'pivotal-entries-projects
-  :actions '(([return] "Show project information."  pivotal-show-project)))
+  :keymap  '(([return] . pivotal-show-project)))
 
-(pivotal-tbl-define iterations
+;;;###autoload(autoload 'pivotal-list-iterations "pivotal")
+(pivotal-define-tbl iterations
   "List of pivotal project iterations."
-  :buffer  "*pivotal-iterations*"
-  :columns [("number"    10 t)
-            ("strength"  10 t)
-            ("start"     21 pivotal-time<)
-            ("finish"    21 pivotal-time<)]
-  :entries 'pivotal-entries-project-iterations
-  :actions '(([return] "Show iteration information."  pivotal-show-iteration)))
+  :menu    pivotal-list-iterations
+  :columns `[("number"    10 t)
+             ("strength"  10 t)
+             ("start"     21 ,(apply-partially #'pivotal-tabulated-time< 2))
+             ("finish"    21 ,(apply-partially #'pivotal-tabulated-time< 3))]
+  :entries 'pivotal-entries-iterations)
 
-(pivotal-tbl-define stories
+;;;###autoload(autoload 'pivotal-list-stories "pivotal")
+(pivotal-define-tbl stories
   "List of pivotal project stories."
-  :buffer  "*pivotal-stories*"
+  :menu    pivotal-list-stories
   :columns [("id"    10 t)
             ("state" 10 t)
             ("name"  20 t)]
-  :entries 'pivotal-entries-project-stories
-  :actions '(([return] "Show story information."     pivotal-show-story)
-             ("O"      "Export to a Org-mode entry"  pivotal-export-story-to-org)))
+  :entries 'pivotal-entries-stories)
 
 ;;;###autoload
 (defun pivotal-show-project (project-id)
