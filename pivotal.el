@@ -53,6 +53,7 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
   :type 'string)
 
 (defvar-local pivotal-project-id nil)
+(defvar-local pivotal-project-labels nil)
 
 (defvar pivotal-read-response-function #'pivotal-read-json-response)
 
@@ -81,7 +82,7 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
 (defun pivotal-2ft (value)
   "Convert VALUE to a floating point time.
 
-If S is already a number, just return it.  If it is a string,
+If VALUE is already a number, just return it.  If it is a string,
 parse it as a time string and apply `float-time' to it.  If VALUE
 is nil, just return 0."
   (cl-typecase value
@@ -98,6 +99,19 @@ is nil, just return 0."
 (defun pivotal-tabulated-time< (n entry-a entry-b)
   "Compare time value by Nth entry N of ENTRY-A and ENTRY-B tabulated entries."
   (pivotal-time< (elt (cadr entry-a) n) (elt (cadr entry-b) n)))
+
+(defmacro pivotal-with-revert (variable &rest body)
+  "Bind VARIABLE and execute BODY.
+
+If VARIABLE changes after BODY is executed, revert the current
+buffer."
+  (declare (indent defun))
+  (let ((initial-value (make-symbol "initial-value")))
+    `(let ((,initial-value ,variable))
+       (unwind-protect
+           (progn ,@body)
+         (unless (equal ,variable ,initial-value)
+           (revert-buffer))))))
 
 (defun pivotal-request (method resource &optional params data noerror)
   "Make a request using METHOD for RESOURCE.
@@ -125,18 +139,9 @@ optional NOERROR is non-nil, in which case return nil."
   (let ((default (and (derived-mode-p 'pivotal-projects-mode) (tabulated-list-get-id))))
     (or (and (not current-prefix-arg) default)
         (let ((entries (seq-map (lambda (project)
-                                  (let-alist project
-                                    (cons (format "[id=%s] %s" .id .name) .id)))
+                                  (let-alist project (cons .name (pivotal-as-string .id))))
                                 (pivotal-request "GET" "/projects" '(("fields" "id,name"))))))
           (assoc-default (completing-read prompt entries nil t) entries)))))
-
-;; Endpoints
-
-
-;; Resources
-
-
-;; UI
 
 (defmacro pivotal-define-tbl (symbol docstring &rest properties)
   "Define tabulated list UI.
@@ -196,6 +201,84 @@ The following PROPERTIES constitute:
            (funcall (function ,mode))
            (tabulated-list-print)
            (pop-to-buffer (current-buffer)))))))
+
+;;; Filter
+(defcustom pivotal-filter-story-stack nil
+  "Custom Pivotal filters."
+  :type 'list
+  :group 'pivotal)
+
+(defvar pivotal-story-types '("feature" "bug" "chore" "release")
+  "List of default Pivotal story types.")
+
+(defvar pivotal-story-states
+  '("accepted" "delivered" "finished" "started" "rejected" "planned" "unstarted" "unscheduled")
+  "List of default Pivotal story states.")
+
+(defsubst pivotal-filter-toggle (value)
+  "Toggle filter VALUE."
+  (if (string-prefix-p "-" value) (substring value 1) (concat "-" value)))
+
+;; TODO(marsam): maybe use `completing-read-multiple'
+(defun pivotal-read-story-type (prompt)
+  "Read story Pivotal type with PROMPT."
+  (completing-read prompt pivotal-story-types nil t))
+
+(defun pivotal-read-story-state (prompt)
+  "Read Pivotal story state with PROMPT."
+  (completing-read prompt pivotal-story-states nil t))
+
+(defun pivotal-read-project-label (prompt &optional project-id)
+  "Read label id with PROMPT from the available ones for PROJECT-ID."
+  (let* ((project-id (setq pivotal-project-id (or project-id pivotal-project-id (pivotal-read-project-id "Project: "))))
+         (entries (setq pivotal-project-labels (or pivotal-project-labels
+                                                   (seq-map (lambda (label)
+                                                              (let-alist label (cons .name (pivotal-as-string .id))))
+                                                            (pivotal-request "GET" (format "/projects/%s/labels" project-id) '(("fields" "id,name"))))))))
+    (assoc-default (completing-read prompt entries nil t) entries)))
+
+(defun pivotal-eval-filter (item)
+  "Eval stack ITEM."
+  (pcase item
+    (`(not ,filter)     (pivotal-filter-toggle (pivotal-eval-filter filter)))
+    (`(,field . ,value) (concat field ":" value))
+    (_ (user-error "Invalid filter: %S" item))))
+
+(defun pivotal-story-filter-by-label ()
+  "Push filter by story type."
+  (interactive)
+  (pivotal-with-revert pivotal-filter-story-stack
+    (push (cons "label" (pivotal-read-project-label "Story label: ")) pivotal-filter-story-stack)))
+
+(defun pivotal-story-filter-by-type ()
+  "Push filter by story type."
+  (interactive)
+  (pivotal-with-revert pivotal-filter-story-stack
+    (push (cons "type" (pivotal-read-story-type "Story type: ")) pivotal-filter-story-stack)))
+
+(defun pivotal-story-filter-by-state ()
+  "Push filter by story state."
+  (interactive)
+  (pivotal-with-revert pivotal-filter-story-stack
+    (push (cons "state" (pivotal-read-story-state "Story state: ")) pivotal-filter-story-stack)))
+
+(defun pivotal-filter-negate ()
+  "Takes the top filter from stack and negate it."
+  (interactive)
+  (pivotal-with-revert pivotal-filter-story-stack
+    (let ((head (car pivotal-filter-story-stack)))
+      (cl-assert head nil "You need at least one filter on the stack")
+      (pop pivotal-filter-story-stack)
+      (push (if (eq 'not (car head)) (cadr head) `(not ,head)) pivotal-filter-story-stack))))
+
+(defvar pivotal-filter-story-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map "!" 'pivotal-filter-negate)
+    (define-key map "t" 'pivotal-story-filter-by-type)
+    (define-key map "l" 'pivotal-story-filter-by-label)
+    (define-key map "s" 'pivotal-story-filter-by-state)
+    map)
+  "Keymap used for filter stories.")
 
 (defun pivotal-entries-projects ()
   "Entries list for pivotal projects."
@@ -228,8 +311,11 @@ The following PROPERTIES constitute:
                  (list (pivotal-as-string .id)
                        (vector (pivotal-as-string .id)
                                .current_state
+                               .story_type
                                .name))))
-             (pivotal-request "GET" (format "/projects/%s/stories" project-id) '(("fields" "id,name,current_state,url,labels(name)"))))))
+             (pivotal-request "GET" (format "/projects/%s/stories" project-id)
+                              `(("fields" "id,name,story_type,current_state,url,labels(name)")
+                                ("filter" ,(mapconcat 'pivotal-eval-filter pivotal-filter-story-stack " ")))))))
 
 ;; Entry points
 
@@ -259,9 +345,11 @@ The following PROPERTIES constitute:
   "List of pivotal project stories."
   :menu    pivotal-list-stories
   :columns [("id"    10 t)
-            ("state" 10 t)
+            ("state" 15 t)
+            ("type"  10 t)
             ("name"  20 t)]
-  :entries 'pivotal-entries-stories)
+  :entries 'pivotal-entries-stories
+  :keymap  '(("/"      . pivotal-filter-story-map)))
 
 ;;;###autoload
 (defun pivotal-show-project (project-id)
