@@ -35,9 +35,11 @@
   (require 'cl-lib)
   (require 'subr-x)
   (require 'url-vars)
+  (require 'wid-edit)
   (defvar url-http-end-of-headers)
   (defvar url-http-response-status))
 (require 'json)
+(require 'widget)
 (require 'parse-time)
 (require 'tabulated-list)
 
@@ -70,7 +72,21 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
 
 (define-error 'pivotal-error "Pivotal Error")
 (define-error 'pivotal-http-error "HTTP Error" 'pivotal-error)
+(define-error 'pivotal-api-error "API Error" 'pivotal-error)
 
+(define-button-type 'pivotal-browse-url
+  'face 'link
+  'help-echo "mouse-2, RET: browse url"
+  'follow-link t
+  'action (lambda (button) (browse-url (button-get button 'target)))
+  'skip t)
+
+(cl-defstruct (pivotal-story
+               (:copier nil)
+               (:constructor pivotal-story-new)
+               (:type vector))
+  "A structure holding the information of a pivotal story."
+  id name description state project-id)
 
 ;; API
 (defsubst pivotal-as-string (value)
@@ -87,6 +103,10 @@ You can obtain your API key in `https://www.pivotaltracker.com/profile'."
 (defsubst pivotal-filter-toggle (value)
   "Toggle filter VALUE."
   (if (string-prefix-p "-" value) (substring value 1) (concat "-" value)))
+
+(defsubst pivotal-link-button (url &optional name)
+  "Create a button for URL with NAME."
+  (make-text-button (or name url) nil 'type 'pivotal-browse-url 'target url))
 
 (defun pivotal-read-json-response (start end)
   "Read json from START to END points."
@@ -143,6 +163,15 @@ optional NOERROR is non-nil, in which case return nil."
                                 (pivotal-request "GET" "/projects" '(("fields" "id,name"))))))
           (assoc-default (completing-read prompt entries nil t) entries)))))
 
+(defun pivotal-read-story-id (prompt project-id)
+  "Read a pivotal story id from a PROJECT-ID with PROMPT."
+  (let ((default (and (derived-mode-p 'pivotal-stories-mode) (tabulated-list-get-id))))
+    (or (and (not current-prefix-arg) default)
+        (let ((entries (seq-map (lambda (project)
+                                  (let-alist project (cons .name (pivotal-as-string .id))))
+                                (pivotal-request "GET" (format "/projects/%s/stories" project-id) '(("fields" "id,name"))))))
+          (assoc-default (completing-read prompt entries nil t) entries)))))
+
 (defmacro pivotal-define-tbl (symbol docstring &rest properties)
   "Define tabulated list UI.
 
@@ -192,15 +221,17 @@ The following PROPERTIES constitute:
        (pcase-dolist (`(,key . ,def) ,keymap)
          (define-key ,mode-map
            (if (vectorp key) key (read-kbd-macro key))
-           (if (and (boundp def) (keymapp (symbol-value def))) (symbol-value def) def)))
+           (if (and (symbolp def) (boundp def) (keymapp (symbol-value def))) (symbol-value def) def)))
 
        (defun ,menu-name ()
          ,docstring
          (interactive)
-         (with-current-buffer (get-buffer-create (if (functionp ,menu-buffer) (funcall ,menu-buffer) ,menu-buffer))
-           (funcall (function ,mode))
-           (tabulated-list-print)
-           (pop-to-buffer (current-buffer)))))))
+         (let ((buffer-name (if (functionp ,menu-buffer) (funcall ,menu-buffer) ,menu-buffer)))
+           (or (get-buffer buffer-name)
+               (with-current-buffer (get-buffer-create buffer-name)
+                 (funcall (function ,mode))
+                 (tabulated-list-print)))
+           (switch-to-buffer buffer-name))))))
 
 ;;; Filter
 (defun pivotal-read-project-label (prompt &optional project-id)
@@ -282,13 +313,108 @@ The following PROPERTIES constitute:
     (seq-map (lambda (story)
                (let-alist story
                  (list (pivotal-as-string .id)
-                       (vector (pivotal-as-string .id)
+                       (vector (pivotal-link-button .url (pivotal-as-string .id))
                                .current_state
                                .story_type
                                .name))))
              (pivotal-request "GET" (format "/projects/%s/stories" project-id)
                               `(("fields" "id,name,story_type,current_state,url,labels(name)")
                                 ("filter" ,(string-join pivotal-filter-story " ")))))))
+
+(defun pivotal-story--edit (story &optional save-function)
+  "Edit pivotal STORY with SAVE-FUNCTION."
+  (with-current-buffer (get-buffer-create "*pivotal-story*")
+    (pop-to-buffer (current-buffer))
+    (let ((inhibit-read-only t)) (erase-buffer))
+    (remove-overlays)
+    (kill-all-local-variables)
+    (widget-insert (propertize (if (pivotal-story-id story) (format "Pivotal story %s\n\n" (pivotal-story-id story)) "New story\n\n") 'face 'font-lock-constant-face))
+    (widget-insert (propertize "Name:\n" 'face 'custom-group-subtitle))
+    (widget-create 'editable-field
+                   :story story
+                   :notify (lambda (widget &rest _ignore)
+                             (setf (pivotal-story-name (widget-get widget :story)) (widget-value widget)))
+                   (pivotal-story-name story))
+    (widget-insert "\n")
+    (widget-create 'menu-choice
+                   :tag "State"
+                   :value (pivotal-story-state story)
+                   :button-face 'custom-button
+                   `(push-button :tag ,(pivotal-story-state story)
+                                 :story ,story
+                                 :format "%[%t%]\n"
+                                 :notify (lambda (widget &rest _ignore)
+                                           (setf (pivotal-story-state (widget-get widget :story)) (widget-value widget))))
+                   '(item "accepted")
+                   '(item "delivered")
+                   '(item "finished")
+                   '(item "started")
+                   '(item "rejected")
+                   '(item "planned")
+                   '(item "unstarted")
+                   '(item "unscheduled"))
+    (widget-insert (propertize "\nDescription:\n" 'face 'custom-group-subtitle))
+    (widget-create 'text
+                   :story story
+                   :notify (lambda (widget &rest _ignore)
+                             (setf (pivotal-story-description (widget-get widget :story)) (widget-value widget)))
+                   (or (pivotal-story-description story) ""))
+    (widget-insert "\n\n")
+    (widget-create 'push-button
+                   :story story
+                   :notify (lambda (widget &rest _ignore)
+                             (funcall save-function (widget-get widget :story))
+                             (bury-buffer)
+                             (message "Done."))
+                   "Save")
+    (widget-insert " ")
+    (widget-create 'push-button
+                   :notify (lambda (&rest _ignore)
+                             (bury-buffer)
+                             (message "Operation canceled."))
+                   "Cancel")
+    (widget-insert "\n")
+    (use-local-map widget-keymap)
+    (widget-setup)))
+
+;;;###autoload
+(defun pivotal-edit-story (story-id &optional project-id)
+  "Show pivotal STORY-ID from PROJECT-ID."
+  (interactive (let* ((project-id (or pivotal-project-id (pivotal-read-project-id "Project: ")))
+                      (story-id (pivotal-read-story-id "Story: " project-id)))
+                 (list story-id project-id)))
+  (pivotal-story--edit (let-alist (pivotal-request "GET" (format "/projects/%s/stories/%s" project-id story-id)) (pivotal-story-new :id .id :name .name :description .description :state .state :project-id .project_id))
+                       (lambda (story)
+                         (let-alist (pivotal-request "PUT" (format "/projects/%s/stories/%s" (pivotal-story-project-id story) (pivotal-story-id story)) nil
+                                                     (append `((name        . ,(pivotal-story-name story))
+                                                               (description . ,(pivotal-story-description story)))
+                                                             (and (pivotal-story-state story)  `((current_state . ,(pivotal-story-state story)))))
+                                                     'noerror)
+                           (if .error
+                               (signal 'pivotal-api-error (list .error .general_problem))
+                             (message "Updated story %s at %s" .id .updated_at))))))
+
+;;;###autoload
+(defun pivotal-add-story (&optional project-id)
+  "Create a story in PROJECT-ID."
+  (interactive (list (or pivotal-project-id (pivotal-read-project-id "Project: "))))
+  (pivotal-story--edit (pivotal-story-new :name "" :description "" :project-id project-id)
+                       (lambda (story)
+                         (let-alist (pivotal-request "POST" (format "/projects/%s/stories" project-id) nil
+                                                     (append `((name        . ,(pivotal-story-name story))
+                                                               (description . ,(pivotal-story-description story)))
+                                                             (and (pivotal-story-state story)  `((current_state . ,(pivotal-story-state story)))))
+                                                     'noerror)
+                           (if .error
+                               (signal 'pivotal-api-error (list .error .general_problem))
+                             (message "Created story %s at %s" .id .created_at))))))
+
+;;;###autoload
+(defun pivotal-edit-project (project-id)
+  "Show project information PROJECT-ID."
+  (interactive (list (pivotal-read-project-id "Project: ")))
+  (let-alist (pivotal-request "GET" (format "/projects/%s" project-id))
+    (message "[TODO] Show project: %s" .name)))
 
 ;; Entry points
 
@@ -301,7 +427,8 @@ The following PROPERTIES constitute:
             ("iteration" 11 t)
             ("name"      10 t)]
   :entries 'pivotal-entries-projects
-  :keymap  '(([return] . pivotal-show-project)))
+  :keymap  '(([return] . pivotal-edit-project)
+             ("i"      . pivotal-list-iterations)))
 
 ;;;###autoload(autoload 'pivotal-list-iterations "pivotal")
 (pivotal-define-tbl iterations
@@ -322,14 +449,9 @@ The following PROPERTIES constitute:
             ("type"  10 t)
             ("name"  20 t)]
   :entries 'pivotal-entries-stories
-  :keymap  '(("/"      . pivotal-filter-story-map)))
-
-;;;###autoload
-(defun pivotal-show-project (project-id)
-  "Show project information PROJECT-ID."
-  (interactive (list (pivotal-read-project-id "Project: ")))
-  (let-alist (pivotal-request "GET" (format "/projects/%s" project-id))
-    (message "[TODO] Show project: %s" .name)))
+  :keymap  '(([return] . pivotal-edit-story)
+             ("+"      . pivotal-add-story)
+             ("/"      . pivotal-filter-story-map)))
 
 (provide 'pivotal)
 ;;; pivotal.el ends here
